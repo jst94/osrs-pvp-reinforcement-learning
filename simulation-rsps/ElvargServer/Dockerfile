@@ -1,8 +1,10 @@
-FROM arm64v8/openjdk:17-jdk-slim
+FROM openjdk:17-jdk-slim
 
-COPY ./build/libs/app.jar .
+WORKDIR /app
 
-COPY ./data ./data
+COPY build/libs/app.jar .
+
+COPY data ./data
 
 USER 1000
 

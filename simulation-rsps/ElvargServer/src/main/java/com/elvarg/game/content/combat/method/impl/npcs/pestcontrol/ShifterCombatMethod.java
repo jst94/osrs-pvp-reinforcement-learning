@@ -13,7 +13,6 @@ import com.elvarg.game.model.movement.path.PathFinder;
 import com.elvarg.game.task.Task;
 import com.elvarg.game.task.TaskManager;
 
-import java.util.Objects;
 import java.util.Optional;
 
 import static com.elvarg.util.NpcIdentifiers.VOID_KNIGHT_8;

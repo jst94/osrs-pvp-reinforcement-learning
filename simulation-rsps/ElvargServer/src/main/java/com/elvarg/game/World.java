@@ -1,6 +1,8 @@
 package com.elvarg.game;
 
 import com.elvarg.Server;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import com.elvarg.game.content.minigames.MinigameHandler;
 import com.elvarg.game.entity.impl.MobileList;
 import com.elvarg.game.entity.impl.grounditem.ItemOnGround;
@@ -45,7 +47,9 @@ import static com.elvarg.game.GameConstants.PLAYER_PERSISTENCE;
  */
 public class World {
 
+	private static final Logger logger = Logger.getLogger(World.class.getName());
 	private static final int MAX_PLAYERS = 500;
+	private static final int ERROR_THRESHOLD = 3; // Number of errors before forcing logout
 
 	/**
 	 * The collection of active {@link Player}s.
@@ -55,8 +59,60 @@ public class World {
 	/**
 	 * The collection of active {@link PlayerBot}s.
 	 */
-	private static TreeMap<String, PlayerBot> playerBots =
-			new TreeMap<String, PlayerBot>(String.CASE_INSENSITIVE_ORDER);
+	private static TreeMap<String, PlayerBot> playerBots = new TreeMap<String, PlayerBot>(String.CASE_INSENSITIVE_ORDER);
+	
+	// Error tracking
+	private static final ThreadLocal<Integer> playerErrors = ThreadLocal.withInitial(() -> 0);
+	private static final ThreadLocal<Integer> npcErrors = ThreadLocal.withInitial(() -> 0);
+	
+	/**
+	 * Handles a player-related error, with recovery attempts before forcing logout
+	 * @param player The player that encountered the error
+	 * @param error The exception that occurred
+	 * @param context Additional context about what was happening
+	 * @return true if the player should be logged out
+	 */
+	private static boolean handlePlayerError(Player player, Exception error, String context) {
+	    int errorCount = playerErrors.get() + 1;
+	    playerErrors.set(errorCount);
+	    
+	    logger.log(Level.SEVERE,
+	        String.format("Error for player %s during %s (Error %d/%d)",
+	            player.getUsername(), context, errorCount, ERROR_THRESHOLD),
+	        error);
+	    
+	    if (errorCount >= ERROR_THRESHOLD) {
+	        logger.log(Level.SEVERE,
+	            String.format("Forcing logout for player %s after %d consecutive errors",
+	                player.getUsername(), errorCount));
+	        return true;
+	    }
+	    return false;
+	}
+	
+	/**
+	 * Handles an NPC-related error
+	 * @param npc The NPC that encountered the error
+	 * @param error The exception that occurred
+	 * @param context Additional context about what was happening
+	 */
+	private static void handleNPCError(NPC npc, Exception error, String context) {
+	    int errorCount = npcErrors.get() + 1;
+	    npcErrors.set(errorCount);
+	    
+	    logger.log(Level.SEVERE,
+	        String.format("Error for NPC %d at %s during %s (Error %d)",
+	            npc.getId(), npc.getLocation(), context, errorCount),
+	        error);
+	}
+	
+	/**
+	 * Resets error counters after successful operations
+	 */
+	private static void resetErrorCounters() {
+	    playerErrors.set(0);
+	    npcErrors.set(0);
+	}
 
 	/**
 	 * The collection of active {@link NPC}s.
@@ -170,19 +226,23 @@ public class World {
 		sortedPlayers.forEach(player -> {
 			       try {
 				       player.processPackets();
+				       resetErrorCounters(); // Reset on success
 			       }
 			       catch (Exception e) {
-				       e.printStackTrace();
-				       player.requestLogout();
+				       if (handlePlayerError(player, e, "packet processing")) {
+					       player.requestLogout();
+				       }
 			       }
 		       });
 		sortedPlayers.forEach(player -> {
 			       try {
 				       player.processPlayer();
+				       resetErrorCounters(); // Reset on success
 			       }
 			       catch (Exception e) {
-				       e.printStackTrace();
-				       player.requestLogout();
+				       if (handlePlayerError(player, e, "player processing")) {
+					       player.requestLogout();
+				       }
 			       }
 		       });
 
@@ -190,11 +250,13 @@ public class World {
 			@Override
 			public void execute(int index) {
 				NPC npc = npcs.get(index);
-				try {
-					npc.process();
-				}
-				catch (Exception e) {
-					e.printStackTrace();
+				if (npc != null) {
+					try {
+						npc.process();
+						resetErrorCounters(); // Reset on success
+					} catch (Exception e) {
+						handleNPCError(npc, e, "NPC processing");
+					}
 				}
 			}
 		});
@@ -212,10 +274,11 @@ public class World {
 					try {
 						PlayerUpdating.update(player);
 						NPCUpdating.update(player);
-					}
-					catch (Exception e) {
-						e.printStackTrace();
-						player.requestLogout();
+						resetErrorCounters(); // Reset on success
+					} catch (Exception e) {
+						if (handlePlayerError(player, e, "player/NPC updating")) {
+							player.requestLogout();
+						}
 					}
 				}
 			}
@@ -231,10 +294,11 @@ public class World {
 						player.setCachedUpdateBlock(null);
 						player.getSession().flush();
 						EventDispatcher.getGlobal().dispatch(new PlayerPacketsFlushedEvent(player));
-					}
-					catch (Exception e) {
-						e.printStackTrace();
-						player.requestLogout();
+						resetErrorCounters(); // Reset on success
+					} catch (Exception e) {
+						if (handlePlayerError(player, e, "player state reset")) {
+							player.requestLogout();
+						}
 					}
 				}
 			}
